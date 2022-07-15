@@ -8,15 +8,28 @@ import math
 from PIL import Image
 import sys
 import numpy as np
+from numpy.linalg import norm
 
 carCascade = cv2.CascadeClassifier('myhaar.xml')
-video = cv2.VideoCapture('videos/new york high resolution.mp4')
+video = cv2.VideoCapture('videos/new york traffic.mp4')
 
 WIDTH = 1280
 HEIGHT = 720
 
 
-# def estimate_speed_from_poisson(samples):
+def d2tod3(x, y, d, c, f):
+    v = np.array([x, y])
+    w = (v - c) / f * d
+    return np.append(w, [d])
+
+
+def estimate_speed_from_poisson(samples, fps):
+    total_number_passing_cars = sum(samples)
+    estimated_mean = total_number_passing_cars/len(samples)
+    estimated_speed_in_frames = estimated_mean
+    # TODO: Finish thinking about this
+    estimated_speed = estimated_speed_in_frames * fps
+    return estimated_speed
 
 
 def estimateSpeed(
@@ -29,13 +42,19 @@ def estimateSpeed(
     if use_depth_estimation:
         x1, y1, w1, h1 = location1
         x2, y2, w2, h2 = location2
-        d_meters = depths[y1, x1] - depths[y2, x2]
+        f_pinhole = 100
+        c = [WIDTH//2, HEIGHT//2]
+        p1 = d2tod3(y1, x1, depths[y1, x1], c, f_pinhole)
+        p2 = d2tod3(y2, x2, depths[y2, x2], c, f_pinhole)
+        diff = p2 - p1
+        d_meters = norm(diff)
+        direction = -np.sign(depths[y2, x2] - depths[y1, x1])
     else:
         d_pixels = math.sqrt(math.pow(
             location2[0] - location1[0], 2) + math.pow(location2[1] - location1[1], 2))
         ppm = 8.8
         d_meters = d_pixels / ppm
-    speed = d_meters * fps * 3.6
+    speed = direction * d_meters * fps * 3.6
     return speed
 
 
@@ -71,7 +90,7 @@ def trackMultipleObjects():
     depth_predictor = DepthPredictor()
     depths = depth_predictor.predict_depths(first_frame_pil)[0, 0]
     depth_predictor.save_depths_to_jpeg(depths, "depth_preds.jpeg")
-    print(depths.shape)
+    print(f"depths shape: {depths.shape}")
     np.save("depthmap.jpg", depths)
 
     while True:
@@ -100,10 +119,14 @@ def trackMultipleObjects():
             carLocation1.pop(carID, None)
             carLocation2.pop(carID, None)
 
-        # if frameCounter % poisson_window:
-        #     poisson_counter.append(tracker_counter)
-        #     poisson_estimate = estimate_speed_from_poisson(poisson_counter)
-        #     tracker_counter = 0
+        if frameCounter % poisson_window == 0:
+            image_pil = Image.fromarray(image)
+            depths = depth_predictor.predict_depths(first_frame_pil)[0, 0]
+
+            poisson_counter.append(tracker_counter)
+            poisson_estimate = estimate_speed_from_poisson(
+                poisson_counter, fps)
+            tracker_counter = 0
 
         if not (frameCounter % 10):
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -179,7 +202,7 @@ def trackMultipleObjects():
 
                 # print 'new previous location: ' + str(carLocation1[i])
                 if [x1, y1, w1, h1] != [x2, y2, w2, h2] and y1 > HEIGHT*1/2:
-                    if (speed[i] == None or speed[i] == 0):
+                    if (speed[i] == None or speed[i] == 0) and y1 >= HEIGHT/2 and (y1 <= 3*HEIGHT/4 and x1 >= WIDTH/4) and x1 <= 3*WIDTH/4:
                         estimated_speed = estimateSpeed(
                             [x1, y1, w1, h1], [x2, y2, w2, h2], depths, fps)
                         speed[i] = estimated_speed
@@ -189,7 +212,7 @@ def trackMultipleObjects():
                             mov_queue.pop()
 
                     # if y1 > 275 and y1 < 285:
-                    if speed[i] != None and y1 >= 180:
+                    if speed[i] != None:
                         cv2.putText(resultImage, str(int(speed[i])) + " km/hr", (int(x1 + w1/2), int(
                             y1-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
 
@@ -205,6 +228,26 @@ def trackMultipleObjects():
             f"current traffic flow estimate: {moving_average} km/h",
             (10, HEIGHT - 20),
             cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2)
+
+        circle_radius = 50
+        margin = 10
+        #colormap = cm.get_cmap('inferno', 256)
+        #cmap = np.linspace(0, 1, 256, endpoint=True)
+        #cmap = colormap.to_rgba(cmap, bytes=True)
+
+        cv2.circle(
+            resultImage,
+            ((circle_radius + margin), circle_radius + margin),
+            circle_radius,
+            (0, abs(moving_average), min(255, 255 - 2*abs(moving_average))),
+            -1
+        )
+
+        # cv2.putText(
+        #     resultImage,
+        #     f"current Poisson traffic flow estimate: {poisson_estimate} km/h",
+        #     (10, HEIGHT - 50),
+        #     cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 0, 255), 2)
 
         cv2.imshow('result', resultImage)
         # Write the frame into the file 'output.avi'

@@ -24,7 +24,7 @@ STEREO_SCALE_FACTOR = 5.4
 
 class DepthPredictor:
     def __init__(self) -> None:
-        self.model_name = "mono+stereo_no_pt_640x192"
+        self.model_name = "stereo_640x192"
         self.device = torch.device("cpu")
         self.scale_factor = STEREO_SCALE_FACTOR
         self.load_model()
